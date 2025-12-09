@@ -184,90 +184,90 @@ function LiquidNetwork.createCustomType(
 	read: (buffer, number) -> any,
 	getSize: (any) -> number
 )
-	return table.freeze({
+	return {
 		write = write,
 		read = read,
 		getSize = getSize,
-	})
+	}
 end
 
-LiquidNetwork.boolean = table.freeze({
+LiquidNetwork.boolean = {
 	write = function(buff: buffer, offset: number, value: boolean)
 		buffer.writeu8(buff, offset, if value then 1 else 0)
 	end,
 	read = function(buff: buffer, offset: number)
 		return if buffer.readu8(buff, offset) == 1 then true else false
 	end,
-	getSize = function(_): number
+	getSize = function(): number
 		return 1
 	end,
-})
+}
 
-LiquidNetwork.uint8 = table.freeze({
+LiquidNetwork.uint8 = {
 	write = buffer.writeu8,
 	read = buffer.readu8,
-	getSize = function(_): number
+	getSize = function(): number
 		return 1
 	end,
-})
+}
 
-LiquidNetwork.uint16 = table.freeze({
+LiquidNetwork.uint16 = {
 	write = buffer.writeu16,
 	read = buffer.readu16,
-	getSize = function(_): number
+	getSize = function(): number
 		return 2
 	end,
-})
+}
 
-LiquidNetwork.uint32 = table.freeze({
+LiquidNetwork.uint32 = {
 	write = buffer.writeu32,
 	read = buffer.readu32,
-	getSize = function(_): number
+	getSize = function(): number
 		return 4
 	end,
-})
+}
 
-LiquidNetwork.int8 = table.freeze({
+LiquidNetwork.int8 = {
 	write = buffer.writei8,
 	read = buffer.readi8,
-	getSize = function(_): number
+	getSize = function(): number
 		return 1
 	end,
-})
+}
 
-LiquidNetwork.int16 = table.freeze({
+LiquidNetwork.int16 = {
 	write = buffer.writei16,
 	read = buffer.readi16,
-	getSize = function(_): number
+	getSize = function(): number
 		return 2
 	end,
-})
+}
 
-LiquidNetwork.int32 = table.freeze({
+LiquidNetwork.int32 = {
 	write = buffer.writei32,
 	read = buffer.readi32,
-	getSize = function(_): number
+	getSize = function(): number
 		return 4
 	end,
-})
+}
 
-LiquidNetwork.float = table.freeze({
+LiquidNetwork.float = {
 	write = buffer.writef32,
 	read = buffer.readf32,
-	getSize = function(_): number
+	getSize = function(): number
 		return 4
 	end,
-})
+}
 
-LiquidNetwork.double = table.freeze({
+LiquidNetwork.double = {
 	write = buffer.writef64,
 	read = buffer.readf64,
-	getSize = function(_): number
+	getSize = function(): number
 		return 8
 	end,
-})
+}
 
-LiquidNetwork.vector3 = table.freeze({
+LiquidNetwork.vector3 = {
 	write = function(buff: buffer, offset: number, value: Vector3)
 		buffer.writef32(buff, offset, value.X)
 		buffer.writef32(buff, offset + 4, value.Y)
@@ -282,12 +282,12 @@ LiquidNetwork.vector3 = table.freeze({
 		return Vector3.new(x, y, z)
 	end,
 
-	getSize = function(_): number
+	getSize = function(): number
 		return 12
 	end,
-})
+}
 
-LiquidNetwork.cframe = table.freeze({
+LiquidNetwork.cframe = {
 	write = function(buff: buffer, offset: number, value: CFrame)
 		local v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 = value:GetComponents()
 		buffer.writef32(buff, offset, v0)
@@ -321,12 +321,12 @@ LiquidNetwork.cframe = table.freeze({
 		)
 	end,
 
-	getSize = function(_): number
+	getSize = function(): number
 		return 48
 	end,
-})
+}
 
-LiquidNetwork.lossyCFrame = table.freeze({
+LiquidNetwork.lossyCFrame = {
 	write = function(buff: buffer, offset: number, value: CFrame)
 		local axis, angle = value:ToAxisAngle()
 		buffer.writef32(buff, offset, value.X)
@@ -354,12 +354,12 @@ LiquidNetwork.lossyCFrame = table.freeze({
 		return CFrame.fromAxisAngle(axis, angle) + position
 	end,
 
-	getSize = function(_): number
+	getSize = function(): number
 		return 28
 	end,
-})
+}
 
-LiquidNetwork.string8 = table.freeze({
+LiquidNetwork.string8 = {
 	write = function(buff: buffer, offset: number, value: string)
 		local length = string.len(value)
 
@@ -376,9 +376,9 @@ LiquidNetwork.string8 = table.freeze({
 	getSize = function(value: string): number
 		return 1 + string.len(value)
 	end,
-})
+}
 
-LiquidNetwork.string16 = table.freeze({
+LiquidNetwork.string16 = {
 	write = function(buff: buffer, offset: number, value: string)
 		local length = string.len(value)
 
@@ -395,9 +395,9 @@ LiquidNetwork.string16 = table.freeze({
 	getSize = function(value: string): number
 		return 2 + string.len(value)
 	end,
-})
+}
 
-LiquidNetwork.string32 = table.freeze({
+LiquidNetwork.string32 = {
 	write = function(buff: buffer, offset: number, value: string)
 		local length = string.len(value)
 
@@ -414,6 +414,7 @@ LiquidNetwork.string32 = table.freeze({
 	getSize = function(value: string): number
 		return 4 + string.len(value)
 	end,
-})
+}
 
 return LiquidNetwork
+
