@@ -147,8 +147,15 @@ end
 
 local LiquidNetwork = {}
 
-function LiquidNetwork.createClient(tag: string, serializationTable: SerializationTable)
-	local remoteEvent = script:WaitForChild(tag)
+function LiquidNetwork.createClient(tag: string, serializationTable: SerializationTable):
+	setmetatable<
+		{
+			_tag: string,_serializationTable: SerializationTable,_remoteEvent: RemoteEvent,_connections: {[number]: RBXScriptConnection}
+		},
+		typeof(ClientRemote)
+	>
+	
+	local remoteEvent = script:WaitForChild(tag) :: RemoteEvent
 
 	local self = {
 		_tag = tag,
@@ -160,8 +167,15 @@ function LiquidNetwork.createClient(tag: string, serializationTable: Serializati
 	return setmetatable(self, ClientRemote)
 end
 
-function LiquidNetwork.createServer(tag: string, serializationTable: SerializationTable)
-	local remoteEvent = script:FindFirstChild(tag)
+function LiquidNetwork.createServer(tag: string, serializationTable: SerializationTable):
+	setmetatable<
+	{
+		_tag: string,_serializationTable: SerializationTable,_remoteEvent: RemoteEvent,_connections: {[number]: RBXScriptConnection}
+	},
+	typeof(ServerRemote)
+		>
+	
+	local remoteEvent = script:FindFirstChild(tag) :: RemoteEvent
 	if not remoteEvent then
 		remoteEvent = Instance.new("RemoteEvent")
 	end
