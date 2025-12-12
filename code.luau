@@ -21,414 +21,438 @@ SOFTWARE.
 --]]
 
 --!strict
-local RunService = game:GetService("RunService")
 
+local RunService = game:GetService("RunService")
 local IS_CLIENT = RunService:IsClient()
 
+export type DataType = {
+	read write: (buffer, number, any) -> (),
+	read read: (buffer, number) -> any,
+	read getSize: (any) -> number,
+} | string
+
 export type SerializationTable = {
-	[number]: {
-		write: (buffer, number, any) -> (),
-		read: (buffer, number) -> any,
-		getSize: (any) -> number,
-	},
+	[number]: DataType
 }
 
 type Args = { [number]: any, ["n"]: number }
 
-local function serialize(args: Args, serializationTable: SerializationTable): buffer
+local function serialize(args: Args, serializationTable: SerializationTable): (buffer | nil, {[number]: any})
 	local size = 0
+	local leftOverArgs = {}
+	
 	for i = 1, #args do
 		local v = args[i]
-		size += serializationTable[i].getSize(v)
+		
+		local dataType = serializationTable[i]
+		
+		if type(dataType) == "string" then
+			leftOverArgs[i] = v
+			continue
+		end
+		
+		size += dataType.getSize(v)
 	end
-
+	
+	if #args == #leftOverArgs then
+		return nil, leftOverArgs
+	end
+	
 	local buff = buffer.create(size)
 
 	local lastOffset = 0
 	for i = 1, #args do
 		local v = args[i]
-
-		local method = serializationTable[i].write
+		
+		local dataType = serializationTable[i]
+		
+		if type(dataType) == "string" then
+			continue
+		end
+		
+		local method = dataType.write
 
 		method(buff, lastOffset, v)
-		lastOffset = i * serializationTable[i].getSize(v)
+		lastOffset += dataType.getSize(v)
 	end
-
-	return buff
+	
+	return buff, leftOverArgs
 end
 
-local function deserialize(buff: buffer, serializationTable: SerializationTable)
-	local args = {}
+local function deserialize(buff: buffer, serializationTable: SerializationTable, leftOverArgs: {[number]: any})
+	local args = leftOverArgs
 
 	local lastOffset = 0
+
 	for i, v in serializationTable do
+		if type(v) == "string" then
+			continue
+		end
+		
 		local method = v.read
 
 		args[i] = method(buff, lastOffset)
-		lastOffset = i * serializationTable[i].getSize(args[i])
+		lastOffset += v.getSize(args[i])
 	end
 
 	return args
 end
 
-local ServerRemote = {}
-ServerRemote.__index = ServerRemote
-
-function ServerRemote:fireClient(player: Player, ...)
-	local args: Args = table.pack(...)
-	local buff = serialize(args, self._serializationTable)
-
-	self._remoteEvent:FireClient(player, buff)
-end
-
-function ServerRemote:fireClients(players: {[number]: Player}, ...)
-	local args: Args = table.pack(...)
-	local buff = serialize(args, self._serializationTable)
+local LiquidNetwork = table.freeze({
+	createServer = function(tag: string, serializationTable: SerializationTable?)
+		local remoteEvent = script:FindFirstChild(tag) :: RemoteEvent
+		if not remoteEvent then
+			remoteEvent = Instance.new("RemoteEvent")
+			remoteEvent.Name = tag
+			remoteEvent.Parent = script
+		end
+		
+		return {
+			fireClient = function(player: Player, ...)
+				local args: Args = table.pack(...)
+				
+				local buff, leftOverArgs
+				if serializationTable then
+					buff, leftOverArgs = serialize(args, serializationTable)
+				else
+					buff = nil;
+					leftOverArgs = args
+				end
+				
+				if not buff then
+					remoteEvent:FireClient(player, table.unpack(leftOverArgs))
+				else
+					remoteEvent:FireClient(player, buff, table.unpack(leftOverArgs))
+				end
+			end,
+			
+			fireClients = function(players: {[number]: Player}, ...)
+				local args: Args = table.pack(...)
+				
+				local buff, leftOverArgs
+				if serializationTable then
+					buff, leftOverArgs = serialize(args, serializationTable)
+				else
+					buff = nil;
+					leftOverArgs = args
+				end
+				
+				for _, player in players do
+					if not buff then
+						remoteEvent:FireClient(player, table.unpack(leftOverArgs))
+					else
+						remoteEvent:FireClient(player, buff, table.unpack(leftOverArgs))
+					end
+				end
+			end,
+			
+			fireAllClients = function(...)
+				local args: Args = table.pack(...)
+				
+				local buff, leftOverArgs
+				if serializationTable then
+					buff, leftOverArgs = serialize(args, serializationTable)
+				else
+					buff = nil;
+					leftOverArgs = args
+				end
+				
+				if not buff then
+					remoteEvent:FireAllClients(table.unpack(leftOverArgs))
+				else
+					remoteEvent:FireAllClients(buff, table.unpack(leftOverArgs))
+				end
+			end,
+			
+			connect = function(callback: (Player, any) -> ()): RBXScriptConnection
+				return remoteEvent.OnServerEvent:Connect(function(player, buff, ...)
+					if not serializationTable or typeof(buff) ~= "buffer" then --is a left over arg
+						callback(player, buff, ...)
+					else
+						local leftOverArgs = table.pack(...)
+						local args = deserialize(buff, serializationTable, leftOverArgs)
+						callback(player, table.unpack(args))
+					end
+				end)
+			end,
+		}
+	end,
 	
-	for _, player in players do
-		self._remoteEvent:FireClient(player, buff)
-	end
-end
+	createClient = function(tag: string, serializationTable: SerializationTable?)
+		local remoteEvent = script:WaitForChild(tag) :: RemoteEvent
 
-function ServerRemote:fireAllClients(...)
-	local args: Args = table.pack(...)
-	local buff = serialize(args, self._serializationTable)
+		return {
+			fireServer = function(...)
+				local args: Args = table.pack(...)
+				
+				local buff, leftOverArgs
+				if serializationTable then
+					buff, leftOverArgs = serialize(args, serializationTable)
+				else
+					buff = nil;
+					leftOverArgs = args
+				end
+				
+				if not buff then
+					remoteEvent:FireServer(table.unpack(leftOverArgs))
+				else
+					remoteEvent:FireServer(buff, table.unpack(leftOverArgs))
+				end
+			end,
 
-	self._remoteEvent:FireAllClients(buff)
-end
-
-function ServerRemote:connect(callback: (Player, any) -> ()): RBXScriptConnection
-	local connection = self._remoteEvent.OnServerEvent:Connect(function(player: Player, buff: buffer)
-		local args = deserialize(buff, self._serializationTable)
-		callback(player, table.unpack(args))
-	end)
-
-	table.insert(self._connections, connection)
-
-	return connection
-end
-
-function ServerRemote:destroy()
-	script[self._tag]:Destroy()
-
-	for _, v in self._connections :: { [number]: RBXScriptConnection } do
-		v:Disconnect()
-	end
-
-	table.clear(self)
-end
-
-local ClientRemote = {}
-ClientRemote.__index = ClientRemote
-
-function ClientRemote:fireServer(...)
-	local args: Args = table.pack(...)
-
-	local buff = serialize(args, self._serializationTable)
-	self._remoteEvent:FireServer(buff)
-end
-
-function ClientRemote:connect(callback: (Player, any) -> ()): RBXScriptConnection
-	return self._remoteEvent.OnClientEvent:Connect(function(buff: buffer)
-		local args = deserialize(buff, self._serializationTable)
-		callback(table.unpack(args))
-	end)
-end
-
-function ClientRemote:destroy()
-	script[self._tag]:Destroy()
-
-	for _, v in self._connections :: { [number]: RBXScriptConnection } do
-		v:Disconnect()
-	end
-
-	table.clear(self)
-end
-
-local LiquidNetwork = {}
-
-function LiquidNetwork.createClient(tag: string, serializationTable: SerializationTable):
-	setmetatable<
-		{
-			_tag: string,_serializationTable: SerializationTable,_remoteEvent: RemoteEvent,_connections: {[number]: RBXScriptConnection}
-		},
-		typeof(ClientRemote)
-	>
+			connect = function(callback: (any) -> ()): RBXScriptConnection
+				return remoteEvent.OnClientEvent:Connect(function(buff, ...)
+					if not serializationTable or typeof(buff) ~= "buffer" then --is a left over arg
+						callback(buff, ...)
+					else
+						local leftOverArgs = table.pack(...)
+						local args = deserialize(buff, serializationTable, leftOverArgs)
+						callback(table.unpack(args))
+					end
+				end)
+			end,
+		}
+	end,
 	
-	local remoteEvent = script:WaitForChild(tag) :: RemoteEvent
-
-	local self = {
-		_tag = tag,
-		_serializationTable = serializationTable,
-		_remoteEvent = remoteEvent,
-		_connections = {},
-	}
-
-	return setmetatable(self, ClientRemote)
-end
-
-function LiquidNetwork.createServer(tag: string, serializationTable: SerializationTable):
-	setmetatable<
-	{
-		_tag: string,_serializationTable: SerializationTable,_remoteEvent: RemoteEvent,_connections: {[number]: RBXScriptConnection}
-	},
-	typeof(ServerRemote)
-		>
+	createCustomType = function(
+		write: (buffer, number, any) -> (),
+		read: (buffer, number) -> any,
+		getSize: (any) -> number
+	): DataType
+		
+		return table.freeze({
+			write = write,
+			read = read,
+			getSize = getSize
+		})
+	end,
 	
-	local remoteEvent = script:FindFirstChild(tag) :: RemoteEvent
-	if not remoteEvent then
-		remoteEvent = Instance.new("RemoteEvent")
-	end
+	any = "any" :: DataType,
+	
+	boolean = table.freeze({
+		write = function(buff: buffer, offset: number, value: boolean)
+			buffer.writeu8(buff, offset, if value then 1 else 0)
+		end,
+		read = function(buff: buffer, offset: number)
+			return if buffer.readu8(buff, offset) == 1 then true else false
+		end,
+		getSize = function(_): number
+			return 1
+		end,
+	}) :: DataType,
 
-	remoteEvent.Name = tag
-	remoteEvent.Parent = script
+	uint8 = table.freeze({
+		write = buffer.writeu8,
+		read = buffer.readu8,
+		getSize = function(_): number
+			return 1
+		end,
+	}) :: DataType,
 
-	local self = {
-		_tag = tag,
-		_serializationTable = serializationTable,
-		_remoteEvent = remoteEvent,
-		_connections = {},
-	}
+	uint16 = table.freeze({
+		write = buffer.writeu16,
+		read = buffer.readu16,
+		getSize = function(_): number
+			return 2
+		end,
+	}) :: DataType,
 
-	return setmetatable(self, ServerRemote)
-end
+	uint32 = table.freeze({
+		write = buffer.writeu32,
+		read = buffer.readu32,
+		getSize = function(_): number
+			return 4
+		end,
+	}) :: DataType,
 
-function LiquidNetwork.createCustomType(
-	write: (buffer, number, any) -> (),
-	read: (buffer, number) -> any,
-	getSize: (any) -> number
-)
-	return {
-		write = write,
-		read = read,
-		getSize = getSize,
-	}
-end
+	int8 = table.freeze({
+		write = buffer.writei8,
+		read = buffer.readi8,
+		getSize = function(_): number
+			return 1
+		end,
+	}) :: DataType,
 
-LiquidNetwork.boolean = {
-	write = function(buff: buffer, offset: number, value: boolean)
-		buffer.writeu8(buff, offset, if value then 1 else 0)
-	end,
-	read = function(buff: buffer, offset: number)
-		return if buffer.readu8(buff, offset) == 1 then true else false
-	end,
-	getSize = function(): number
-		return 1
-	end,
-}
+	int16 = table.freeze({
+		write = buffer.writei16,
+		read = buffer.readi16,
+		getSize = function(_): number
+			return 2
+		end,
+	}) :: DataType,
 
-LiquidNetwork.uint8 = {
-	write = buffer.writeu8,
-	read = buffer.readu8,
-	getSize = function(): number
-		return 1
-	end,
-}
+	int32 = table.freeze({
+		write = buffer.writei32,
+		read = buffer.readi32,
+		getSize = function(_): number
+			return 4
+		end,
+	}) :: DataType,
 
-LiquidNetwork.uint16 = {
-	write = buffer.writeu16,
-	read = buffer.readu16,
-	getSize = function(): number
-		return 2
-	end,
-}
+	float = table.freeze({
+		write = buffer.writef32,
+		read = buffer.readf32,
+		getSize = function(_): number
+			return 4
+		end,
+	}) :: DataType,
 
-LiquidNetwork.uint32 = {
-	write = buffer.writeu32,
-	read = buffer.readu32,
-	getSize = function(): number
-		return 4
-	end,
-}
+	double = table.freeze({
+		write = buffer.writef64,
+		read = buffer.readf64,
+		getSize = function(_): number
+			return 8
+		end,
+	}) :: DataType,
 
-LiquidNetwork.int8 = {
-	write = buffer.writei8,
-	read = buffer.readi8,
-	getSize = function(): number
-		return 1
-	end,
-}
+	vector3 = table.freeze({
+		write = function(buff: buffer, offset: number, value: Vector3)
+			buffer.writef32(buff, offset, value.X)
+			buffer.writef32(buff, offset + 4, value.Y)
+			buffer.writef32(buff, offset + 8, value.Z)
+		end,
 
-LiquidNetwork.int16 = {
-	write = buffer.writei16,
-	read = buffer.readi16,
-	getSize = function(): number
-		return 2
-	end,
-}
+		read = function(buff: buffer, offset: number): Vector3
+			local x = buffer.readf32(buff, offset)
+			local y = buffer.readf32(buff, offset + 4)
+			local z = buffer.readf32(buff, offset + 8)
 
-LiquidNetwork.int32 = {
-	write = buffer.writei32,
-	read = buffer.readi32,
-	getSize = function(): number
-		return 4
-	end,
-}
+			return Vector3.new(x, y, z)
+		end,
 
-LiquidNetwork.float = {
-	write = buffer.writef32,
-	read = buffer.readf32,
-	getSize = function(): number
-		return 4
-	end,
-}
+		getSize = function(_): number
+			return 12
+		end,
+	}) :: DataType,
 
-LiquidNetwork.double = {
-	write = buffer.writef64,
-	read = buffer.readf64,
-	getSize = function(): number
-		return 8
-	end,
-}
+	cframe = table.freeze({
+		write = function(buff: buffer, offset: number, value: CFrame)
+			local v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 = value:GetComponents()
+			buffer.writef32(buff, offset, v0)
+			buffer.writef32(buff, offset + 4, v1)
+			buffer.writef32(buff, offset + 8, v2)
+			buffer.writef32(buff, offset + 12, v3)
+			buffer.writef32(buff, offset + 16, v4)
+			buffer.writef32(buff, offset + 20, v5)
+			buffer.writef32(buff, offset + 24, v6)
+			buffer.writef32(buff, offset + 28, v7)
+			buffer.writef32(buff, offset + 32, v8)
+			buffer.writef32(buff, offset + 36, v9)
+			buffer.writef32(buff, offset + 40, v10)
+			buffer.writef32(buff, offset + 44, v11)
+		end,
 
-LiquidNetwork.vector3 = {
-	write = function(buff: buffer, offset: number, value: Vector3)
-		buffer.writef32(buff, offset, value.X)
-		buffer.writef32(buff, offset + 4, value.Y)
-		buffer.writef32(buff, offset + 8, value.Z)
-	end,
+		read = function(buff: buffer, offset: number): CFrame
+			return CFrame.new(
+				buffer.readf32(buff, offset),
+				buffer.readf32(buff, offset + 4),
+				buffer.readf32(buff, offset + 8),
+				buffer.readf32(buff, offset + 12),
+				buffer.readf32(buff, offset + 16),
+				buffer.readf32(buff, offset + 20),
+				buffer.readf32(buff, offset + 24),
+				buffer.readf32(buff, offset + 28),
+				buffer.readf32(buff, offset + 32),
+				buffer.readf32(buff, offset + 36),
+				buffer.readf32(buff, offset + 40),
+				buffer.readf32(buff, offset + 44)
+			)
+		end,
 
-	read = function(buff: buffer, offset: number): Vector3
-		local x = buffer.readf32(buff, offset)
-		local y = buffer.readf32(buff, offset + 4)
-		local z = buffer.readf32(buff, offset + 8)
+		getSize = function(_): number
+			return 48
+		end,
+	}) :: DataType,
 
-		return Vector3.new(x, y, z)
-	end,
+	lossyCFrame = table.freeze({
+		write = function(buff: buffer, offset: number, value: CFrame)
+			local axis, angle = value:ToAxisAngle()
+			buffer.writef32(buff, offset, value.X)
+			buffer.writef32(buff, offset + 4, value.Y)
+			buffer.writef32(buff, offset + 8, value.Z)
+			buffer.writef32(buff, offset + 12, axis.X)
+			buffer.writef32(buff, offset + 16, axis.Y)
+			buffer.writef32(buff, offset + 20, axis.Z)
+			buffer.writef32(buff, offset + 24, angle)
+		end,
 
-	getSize = function(): number
-		return 12
-	end,
-}
+		read = function(buff: buffer, offset: number): CFrame
+			local angle = buffer.readf32(buff, offset + 24)
+			local axis = Vector3.new(
+				buffer.readf32(buff, offset + 12),
+				buffer.readf32(buff, offset + 16),
+				buffer.readf32(buff, offset + 20)
+			)
+			local position = Vector3.new(
+				buffer.readf32(buff, offset),
+				buffer.readf32(buff, offset + 4),
+				buffer.readf32(buff, offset + 8)
+			)
 
-LiquidNetwork.cframe = {
-	write = function(buff: buffer, offset: number, value: CFrame)
-		local v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 = value:GetComponents()
-		buffer.writef32(buff, offset, v0)
-		buffer.writef32(buff, offset + 4, v1)
-		buffer.writef32(buff, offset + 8, v2)
-		buffer.writef32(buff, offset + 12, v3)
-		buffer.writef32(buff, offset + 16, v4)
-		buffer.writef32(buff, offset + 20, v5)
-		buffer.writef32(buff, offset + 24, v6)
-		buffer.writef32(buff, offset + 28, v7)
-		buffer.writef32(buff, offset + 32, v8)
-		buffer.writef32(buff, offset + 36, v9)
-		buffer.writef32(buff, offset + 40, v10)
-		buffer.writef32(buff, offset + 44, v11)
-	end,
+			return CFrame.fromAxisAngle(axis, angle) + position
+		end,
 
-	read = function(buff: buffer, offset: number): CFrame
-		return CFrame.new(
-			buffer.readf32(buff, offset),
-			buffer.readf32(buff, offset + 4),
-			buffer.readf32(buff, offset + 8),
-			buffer.readf32(buff, offset + 12),
-			buffer.readf32(buff, offset + 16),
-			buffer.readf32(buff, offset + 20),
-			buffer.readf32(buff, offset + 24),
-			buffer.readf32(buff, offset + 28),
-			buffer.readf32(buff, offset + 32),
-			buffer.readf32(buff, offset + 36),
-			buffer.readf32(buff, offset + 40),
-			buffer.readf32(buff, offset + 44)
-		)
-	end,
+		getSize = function(_): number
+			return 28
+		end,
+	}) :: DataType,
 
-	getSize = function(): number
-		return 48
-	end,
-}
+	string8 = table.freeze({
+		write = function(buff: buffer, offset: number, value: string)
+			local length = string.len(value)
 
-LiquidNetwork.lossyCFrame = {
-	write = function(buff: buffer, offset: number, value: CFrame)
-		local axis, angle = value:ToAxisAngle()
-		buffer.writef32(buff, offset, value.X)
-		buffer.writef32(buff, offset + 4, value.Y)
-		buffer.writef32(buff, offset + 8, value.Z)
-		buffer.writef32(buff, offset + 12, axis.X)
-		buffer.writef32(buff, offset + 16, axis.Y)
-		buffer.writef32(buff, offset + 20, axis.Z)
-		buffer.writef32(buff, offset + 24, angle)
-	end,
+			buffer.writeu8(buff, offset, length)
+			buffer.writestring(buff, offset + 1, value)
+		end,
 
-	read = function(buff: buffer, offset: number): CFrame
-		local angle = buffer.readf32(buff, offset + 24)
-		local axis = Vector3.new(
-			buffer.readf32(buff, offset + 12),
-			buffer.readf32(buff, offset + 16),
-			buffer.readf32(buff, offset + 20)
-		)
-		local position = Vector3.new(
-			buffer.readf32(buff, offset),
-			buffer.readf32(buff, offset + 4),
-			buffer.readf32(buff, offset + 8)
-		)
+		read = function(buff: buffer, offset: number): string
+			local length = buffer.readu8(buff, offset)
 
-		return CFrame.fromAxisAngle(axis, angle) + position
-	end,
+			return buffer.readstring(buff, offset + 1, length)
+		end,
 
-	getSize = function(): number
-		return 28
-	end,
-}
+		getSize = function(value: string): number
+			return 1 + string.len(value)
+		end,
+	}) :: DataType,
 
-LiquidNetwork.string8 = {
-	write = function(buff: buffer, offset: number, value: string)
-		local length = string.len(value)
+	string16 = table.freeze({
+		write = function(buff: buffer, offset: number, value: string)
+			local length = string.len(value)
 
-		buffer.writeu8(buff, offset, length)
-		buffer.writestring(buff, offset + 1, value)
-	end,
+			buffer.writeu16(buff, offset, length)
+			buffer.writestring(buff, offset + 2, value)
+		end,
 
-	read = function(buff: buffer, offset: number): string
-		local length = buffer.readu8(buff, offset)
+		read = function(buff: buffer, offset: number): string
+			local length = buffer.readu16(buff, offset)
 
-		return buffer.readstring(buff, offset + 1, length)
-	end,
+			return buffer.readstring(buff, offset + 2, length)
+		end,
 
-	getSize = function(value: string): number
-		return 1 + string.len(value)
-	end,
-}
+		getSize = function(value: string): number
+			return 2 + string.len(value)
+		end,
+	}) :: DataType,
 
-LiquidNetwork.string16 = {
-	write = function(buff: buffer, offset: number, value: string)
-		local length = string.len(value)
+	string32 = table.freeze({
+		write = function(buff: buffer, offset: number, value: string)
+			local length = string.len(value)
 
-		buffer.writeu16(buff, offset, length)
-		buffer.writestring(buff, offset + 2, value)
-	end,
+			buffer.writeu32(buff, offset, length)
+			buffer.writestring(buff, offset + 4, value)
+		end,
 
-	read = function(buff: buffer, offset: number): string
-		local length = buffer.readu16(buff, offset)
+		read = function(buff: buffer, offset: number): string
+			local length = buffer.readu32(buff, offset)
 
-		return buffer.readstring(buff, offset + 2, length)
-	end,
+			return buffer.readstring(buff, offset + 4, length)
+		end,
 
-	getSize = function(value: string): number
-		return 2 + string.len(value)
-	end,
-}
-
-LiquidNetwork.string32 = {
-	write = function(buff: buffer, offset: number, value: string)
-		local length = string.len(value)
-
-		buffer.writeu32(buff, offset, length)
-		buffer.writestring(buff, offset + 4, value)
-	end,
-
-	read = function(buff: buffer, offset: number): string
-		local length = buffer.readu32(buff, offset)
-
-		return buffer.readstring(buff, offset + 4, length)
-	end,
-
-	getSize = function(value: string): number
-		return 4 + string.len(value)
-	end,
-}
+		getSize = function(value: string): number
+			return 4 + string.len(value)
+		end,
+	}) :: DataType,
+})
 
 return LiquidNetwork
-
